@@ -1,5 +1,24 @@
 <?php
 include 'config.php'; // Connect to the database
+
+$letter = isset($_GET['letter']) && preg_match('/^[A-Z]$/', $_GET['letter']) ? $_GET['letter'] . '%' : '%';
+
+$sql = "SELECT id, name FROM games WHERE name LIKE ? ORDER BY name ASC";
+$stmt = $conn->prepare($sql);
+$stmt->bind_param("s", $letter);
+$stmt->execute();
+$result = $stmt->get_result();
+
+// If this is an AJAX request, return only the table rows
+if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
+    while ($row = $result->fetch_assoc()) {
+        echo "<tr>";
+        echo "<td>" . htmlspecialchars($row["name"]) . "</td>";
+        echo "<td><a href='games.php?id=" . $row["id"] . "' class='game-link'>View</a></td>";
+        echo "</tr>";
+    }
+    exit;
+}
 ?>
 
 <!DOCTYPE html>
@@ -9,19 +28,21 @@ include 'config.php'; // Connect to the database
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>All Games</title>
     <link rel="stylesheet" href="main.css">
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
 </head>
 <body>
 
 <h1>All Games</h1>
 
+<!-- Alphabet Filter -->
 <p>
     <strong>Filter by letter:</strong>
     <?php
     foreach (range('A', 'Z') as $letter) {
-        echo "<a href='gamelis.php?letter=$letter'>$letter</a> ";
+        echo "<a href='#' class='filter-link' data-letter='$letter'>$letter</a> ";
     }
     ?>
-    | <a href="gamelis.php">Show All</a>
+    | <a href="#" class="filter-link" data-letter="">Show All</a>
 </p>
 
 <table border="1">
@@ -29,35 +50,44 @@ include 'config.php'; // Connect to the database
         <th>Game</th>
         <th>Action</th>
     </tr>
-
-    <?php
-    // Check if filtering by letter
-    if (isset($_GET['letter']) && preg_match('/^[A-Z]$/', $_GET['letter'])) {
-        $letter = $_GET['letter'] . '%';
-
-        // Use prepared statement
-        $stmt = $conn->prepare("SELECT id, name FROM games WHERE name LIKE ?");
-        $stmt->bind_param("s", $letter);
-        $stmt->execute();
-        $result = $stmt->get_result();
-    } else {
-        $sql = "SELECT id, name FROM games ORDER BY name ASC";
-        $result = $conn->query($sql);
-    }
-
-    if ($result->num_rows > 0) {
+    <tbody id="game-table">
+        <?php
         while ($row = $result->fetch_assoc()) {
             echo "<tr>";
             echo "<td>" . htmlspecialchars($row["name"]) . "</td>";
-            echo "<td><a href='games.php?id=" . $row["id"] . "'>View</a></td>";
+            echo "<td><a href='games.php?id=" . $row["id"] . "' class='game-link'>View</a></td>";
             echo "</tr>";
         }
-    } else {
-        echo "<tr><td colspan='2'>No games found.</td></tr>";
-    }
-    ?>
-
+        ?>
+    </tbody>
 </table>
+
+<script>
+$(document).ready(function () {
+    $(".filter-link").click(function (e) {
+        e.preventDefault();
+        var letter = $(this).data("letter");
+
+        $.ajax({
+            url: "gameslis.php",
+            type: "GET",
+            data: { letter: letter, ajax: 1 },
+            success: function (response) {
+                $("#game-table").html(response);
+                // Rebind click events to newly added game links
+                $(".game-link").off("click").on("click", function (e) {
+                    window.location.href = $(this).attr("href");
+                });
+            }
+        });
+    });
+
+    // Ensure game links remain functional
+    $(document).on("click", ".game-link", function (e) {
+        window.location.href = $(this).attr("href");
+    });
+});
+</script>
 
 </body>
 </html>
