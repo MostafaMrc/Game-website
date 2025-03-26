@@ -1,24 +1,30 @@
 <?php
 include 'config.php';
 
-if (!isset($_GET['id'])) {
-    die("No game selected.");
+if (!isset($_GET['id']) || !is_numeric($_GET['id'])) {
+    die("Invalid game ID.");
 }
 
 $game_id = (int) $_GET['id'];
 
-$sql = "SELECT * FROM games WHERE id = $game_id";
-$result = $conn->query($sql);
+// Fetch game details securely
+$stmt = $conn->prepare("SELECT name, image_url, description, release_date, platform, genre FROM games WHERE id = ?");
+$stmt->bind_param("i", $game_id);
+$stmt->execute();
+$result = $stmt->get_result();
 
-if ($result->num_rows == 0) {
+if ($result->num_rows === 0) {
     die("Game not found.");
 }
 
 $game = $result->fetch_assoc();
+$stmt->close();
 
 // Fetch characters related to this game
-$char_sql = "SELECT character_name, character_image, description FROM characters WHERE game_id = $game_id";
-$char_result = $conn->query($char_sql);
+$char_stmt = $conn->prepare("SELECT character_name, character_image, description FROM characters WHERE game_id = ?");
+$char_stmt->bind_param("i", $game_id);
+$char_stmt->execute();
+$char_result = $char_stmt->get_result();
 
 ?>
 <!DOCTYPE html>
@@ -51,8 +57,15 @@ $char_result = $conn->query($char_sql);
         <div class="character-list">
             <?php while ($character = $char_result->fetch_assoc()): ?>
                 <div class="character">
-                    <img src="cache_image.php?url=<?php echo urlencode($character['character_image']); ?>" 
-                         alt="<?php echo htmlspecialchars($character['character_name']); ?>">
+                    <?php 
+                    $char_img_url = htmlspecialchars($character['character_image'] ?? '');
+                    if (!empty($char_img_url)): 
+                    ?>
+                        <img src="cache_image.php?url=<?php echo urlencode($char_img_url); ?>" 
+                             alt="<?php echo htmlspecialchars($character['character_name']); ?>">
+                    <?php else: ?>
+                        <p>No image found for: <?php echo htmlspecialchars($character['character_name']); ?></p>
+                    <?php endif; ?>
                     <p><strong><?php echo htmlspecialchars($character['character_name']); ?></strong></p>
                     <p><?php echo nl2br(htmlspecialchars($character['description'] ?? "No description available.")); ?></p>
                 </div>
@@ -63,3 +76,8 @@ $char_result = $conn->query($char_sql);
     </div>
 </body>
 </html>
+
+<?php
+$char_stmt->close();
+$conn->close();
+?>

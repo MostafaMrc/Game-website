@@ -1,11 +1,10 @@
 <?php
 set_time_limit(1000);
-
-require 'config.php'; // Load database and API configuration
+require 'config.php'; // Load database configuration
 
 $api_key = "d0857161568198fed9c0d896bf5cef0c3ec6bbbf"; 
 $categories = ["games", "game", "characters", "character", ""]; // Define categories
-$limit = 450; // API request limit per page (adjust based on API restrictions)
+$limit = 450; // API request limit per page
 
 function fetch_api_data($url) {
     $ch = curl_init();
@@ -21,22 +20,76 @@ function fetch_api_data($url) {
         return false;
     }
 
-    // Remove the callback function wrapper to get the raw JSON data
+    // Remove JSONP callback wrapper
     $response = preg_replace('/^myCallbackFunction\((.*)\);$/', '$1', $response);
     
     return json_decode($response, true);
 }
 
+// Function to cache images
+function cache_image($imageUrl) {
+    global $conn;
+
+    $cacheDir = 'cache/';
+    if (!is_dir($cacheDir)) {
+        mkdir($cacheDir, 0777, true);
+    }
+
+    // Check if image already exists in database
+    $stmt = $conn->prepare("SELECT cached_path FROM cached_images WHERE image_url = ?");
+    $stmt->bind_param("s", $imageUrl);
+    $stmt->execute();
+    $stmt->bind_result($cachedPath);
+    if ($stmt->fetch()) {
+        $stmt->close();
+        return $cachedPath; // Return existing cached image
+    }
+    $stmt->close();
+
+    // Get image extension
+    $imageExt = pathinfo(parse_url($imageUrl, PHP_URL_PATH), PATHINFO_EXTENSION);
+    $validExtensions = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+    if (!in_array(strtolower($imageExt), $validExtensions)) {
+        $imageExt = 'jpg';
+    }
+
+    // Generate a unique file name
+    $imageName = md5($imageUrl) . '.' . $imageExt;
+    $cachedFile = $cacheDir . $imageName;
+
+    // Download the image
+    $ch = curl_init($imageUrl);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+    curl_setopt($ch, CURLOPT_USERAGENT, 'Mozilla/5.0');
+    $imageData = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($httpCode == 200 && $imageData) {
+        file_put_contents($cachedFile, $imageData);
+
+        // Store the cached image path in database
+        $stmt = $conn->prepare("INSERT INTO cached_images (image_url, cached_path) VALUES (?, ?)");
+        $stmt->bind_param("ss", $imageUrl, $cachedFile);
+        $stmt->execute();
+        $stmt->close();
+
+        return $cachedFile;
+    }
+
+    return null; // Return null if download failed
+}
+
 foreach ($categories as $category) {
     $page = 1;
     while (true) {
-        // Modified to request JSONP by adding "callback=myCallbackFunction"
         $games_url = "https://www.giantbomb.com/api/games/?api_key=$api_key&format=jsonp&callback=myCallbackFunction&filter=genres:$category&limit=$limit&page=$page";
         $games_data = fetch_api_data($games_url);
 
         sleep(5);
 
-        if (!$games_data || !isset($games_data['results']) || empty($games_data['results'])) {
+        if (!$games_data || empty($games_data['results'])) {
             echo "No more data for category: $category\n";
             break;
         }
@@ -68,9 +121,10 @@ foreach ($categories as $category) {
             $name = $game['name'];
             $description = $game['deck'] ?? null;
             $release_date = $game['original_release_date'] ?? null;
-            $image_url = $game['image']['medium_url'] ?? null;
+            $original_image_url = $game['image']['medium_url'] ?? null;
+            $image_url = $original_image_url ? cache_image($original_image_url) : null;
             $platform = $game['platforms'][0]['name'] ?? null;
-            $genre = $category; // Assigning the category we are fetching
+            $genre = $category;
             $developer = $game['developers'][0]['name'] ?? null;
             $publisher = $game['publishers'][0]['name'] ?? null;
 
@@ -99,7 +153,8 @@ foreach ($categories as $category) {
                 foreach ($game_data['results']['characters'] as $character) {
                     $game_id = $id;
                     $character_name = $character['name'] ?? "Unknown";
-                    $character_image = $character['image']['medium_url'] ?? null;
+                    $original_character_image = $character['image']['medium_url'] ?? null;
+                    $character_image = $original_character_image ? cache_image($original_character_image) : null;
                     $char_description = $character['deck'] ?? null;
 
                     $char_stmt->execute();
@@ -112,12 +167,11 @@ foreach ($categories as $category) {
         
         echo "Inserted " . count($games_data['results']) . " records for category: $category (Page: $page)\n";
 
-        // If fewer than the limit, stop (last page reached)
         if (count($games_data['results']) < $limit) {
             break;
         }
 
-        $page++; // Move to next page
+        $page++;
     }
 }
 
